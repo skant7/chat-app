@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Private Chat</title>
+  <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --border: #2a2f3a;
+      --text: #e8eaed;
+      --muted: #9aa0a6;
+      --accent: #6c9eff;
+      --mine: #1e3a5f;
+      --theirs: #252a33;
+      --online: #3dd68c;
+      --danger: #ff8a8a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+    }
+    #app { width: 100%; max-width: 960px; display: flex; flex-direction: column; height: 100vh; }
+    #login {
+      margin: auto;
+      width: min(380px, 92vw);
+      padding: 2rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    #login h1 { font-size: 1.35rem; margin: 0 0 0.35rem; }
+    #login p.lead { color: var(--muted); font-size: 0.9rem; margin: 0 0 1.25rem; line-height: 1.4; }
+    #login label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 0.3rem;
+    }
+    #login input {
+      width: 100%;
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      margin-bottom: 0.85rem;
+    }
+    #loginActions { display: flex; gap: 0.5rem; }
+    #login button, #sendBtn, #startChatBtn {
+      flex: 1;
+      padding: 0.65rem 1rem;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #0b1220;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #registerBtn {
+      background: transparent;
+      border: 1px solid var(--border) !important;
+      color: var(--text) !important;
+    }
+    #login button:disabled, #sendBtn:disabled, #attachBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #authError {
+      display: none;
+      color: var(--danger);
+      font-size: 0.85rem;
+      margin: 0 0 0.75rem;
+      line-height: 1.35;
+    }
+    #authError.visible { display: block; }
+    #shell { display: none; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: 0; overflow: hidden; }
+    @media (min-width: 700px) {
+      #shell { margin: 1rem; border-radius: 12px; }
+    }
+    #sidebar {
+      width: 280px;
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    #sidebar header {
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.85rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 0.35rem 0.75rem;
+    }
+    #sidebar header strong { display: block; font-size: 1rem; flex: 1; }
+    #sidebar header span { color: var(--muted); width: 100%; }
+    #logoutBtn {
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      border-radius: 6px;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+      cursor: pointer;
+    }
+    #logoutBtn:hover { color: var(--text); }
+    #newChat {
+      padding: 0.75rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 0.4rem;
+    }
+    #newChat input {
+      flex: 1;
+      min-width: 0;
+      padding: 0.45rem 0.55rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.85rem;
+    }
+    #startChatBtn { width: auto; padding: 0.45rem 0.7rem; font-size: 0.8rem; flex: 0; }
+    #contacts { flex: 1; overflow-y: auto; }
+    .contact {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.7rem 1rem;
+      cursor: pointer;
+      border: none;
+      width: 100%;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      font: inherit;
+    }
+    .contact:hover, .contact.active { background: #222733; }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #555; flex-shrink: 0;
+    }
+    .dot.on { background: var(--online); }
+    #main { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+    #chatHeader {
+      padding: 0.9rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      min-height: 3.2rem;
+    }
+    #chatHeader .peer { font-weight: 600; }
+    #chatHeader .hint { color: var(--muted); font-size: 0.85rem; }
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .bubble {
+      max-width: min(75%, 420px);
+      padding: 0.55rem 0.75rem;
+      border-radius: 12px;
+      line-height: 1.35;
+      word-wrap: break-word;
+    }
+    .bubble.mine { align-self: flex-end; background: var(--mine); border-bottom-right-radius: 4px; }
+    .bubble.theirs { align-self: flex-start; background: var(--theirs); border-bottom-left-radius: 4px; }
+    .bubble .meta { font-size: 0.7rem; color: var(--muted); margin-top: 0.25rem; }
+    .bubble img.media {
+      display: block;
+      max-width: 100%;
+      max-height: 280px;
+      border-radius: 8px;
+      margin-bottom: 0.35rem;
+      cursor: pointer;
+    }
+    .bubble a.file-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.9rem;
+      word-break: break-all;
+    }
+    .bubble a.file-link:hover { text-decoration: underline; }
+    .bubble .caption { margin-top: 0.25rem; }
+    #composerWrap {
+      border-top: 1px solid var(--border);
+      background: var(--panel);
+    }
+    #attachPreview {
+      display: none;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.5rem 0.75rem 0;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    #attachPreview.visible { display: flex; }
+    #attachPreview img {
+      max-height: 48px;
+      max-width: 80px;
+      border-radius: 6px;
+      object-fit: cover;
+    }
+    #attachPreview .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #clearAttach {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 1.1rem;
+      padding: 0.2rem 0.4rem;
+    }
+    #composer {
+      display: flex;
+      gap: 0.5rem;
+      padding: 0.75rem;
+      align-items: center;
+    }
+    #composer input[type="text"] {
+      flex: 1;
+      padding: 0.6rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+    }
+    #attachBtn {
+      width: auto;
+      padding: 0.55rem 0.7rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 1.1rem;
+      line-height: 1;
+    }
+    #attachBtn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    #sendBtn { width: auto; flex: 0; }
+    #fileInput { display: none; }
+    #emptyState {
+      margin: auto;
+      text-align: center;
+      color: var(--muted);
+      padding: 2rem;
+      max-width: 280px;
+      line-height: 1.45;
+    }
+    #uploadError {
+      display: none;
+      padding: 0 0.75rem 0.35rem;
+      color: var(--danger);
+      font-size: 0.8rem;
+    }
+    #uploadError.visible { display: block; }
+    @media (max-width: 640px) {
+      #sidebar { width: 100%; max-width: 100%; }
+      #shell.chatting #sidebar { display: none; }
+      #shell:not(.chatting) #main { display: none; }
+    }
+
+    #authInfo {
+      display: none;
+      color: var(--online);
+      font-size: 0.85rem;
+      margin: 0 0 0.75rem;
+      line-height: 1.35;
+      word-break: break-all;
+    }
+    #authInfo.visible { display: block; }
+    #showForgotBtn, .linkish {
+      display: block;
+      width: 100%;
+      margin-top: 0.85rem;
+      padding: 0;
+      border: none;
+      background: none;
+      color: var(--accent);
+      font-size: 0.85rem;
+      cursor: pointer;
+      text-align: center;
+    }
+    .secondaryBtn {
+      background: transparent !important;
+      border: 1px solid var(--border) !important;
+      color: var(--text) !important;
+    }
+    .hintSmall { color: var(--muted); font-size: 0.8rem; margin: 0.75rem 0 0; line-height: 1.35; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="login">
+      <h1>Private Chat</h1>
+      <p class="lead">Sign in with username and password. Messages stay private between you and your peer.</p>
+      <div id="authError" role="alert"></div>
+      <div id="authInfo" role="status"></div>
+
+      <div id="authPanelLogin">
+        <label for="username">Username</label>
+        <input id="username" type="text" placeholder="Your display name" maxlength="40" autocomplete="username" />
+        <label for="password">Password</label>
+        <input id="password" type="password" placeholder="At least 6 characters" maxlength="200" autocomplete="current-password" />
+        <div id="loginActions">
+          <button id="loginBtn" type="button">Log in</button>
+          <button id="registerBtn" type="button">Register</button>
+        </div>
+        <button type="button" id="showForgotBtn" class="linkish">Forgot password?</button>
+      </div>
+
+      <div id="authPanelForgot" hidden>
+        <label for="forgotUsername">Username</label>
+        <input id="forgotUsername" type="text" placeholder="Your display name" maxlength="40" autocomplete="username" />
+        <div id="loginActions">
+          <button id="forgotBtn" type="button">Send reset token</button>
+          <button id="backFromForgotBtn" type="button" class="secondaryBtn">Back</button>
+        </div>
+        <p class="hintSmall">No email in this app — the reset token is shown here when issued.</p>
+      </div>
+
+      <div id="authPanelReset" hidden>
+        <label for="resetTokenInput">Reset token</label>
+        <input id="resetTokenInput" type="text" placeholder="Paste reset token" maxlength="64" autocomplete="off" />
+        <label for="newPassword">New password</label>
+        <input id="newPassword" type="password" placeholder="At least 6 characters" maxlength="200" autocomplete="new-password" />
+        <div id="loginActions">
+          <button id="resetBtn" type="button">Set new password</button>
+          <button id="backFromResetBtn" type="button" class="secondaryBtn">Back to login</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="shell">
+      <aside id="sidebar">
+        <header>
+          <strong id="meLabel"></strong>
+          <button type="button" id="logoutBtn">Log out</button>
+          <span id="status">Connecting…</span>
+        </header>
+        <div id="newChat">
+          <input id="peerInput" type="text" placeholder="Message someone…" maxlength="40" />
+          <button id="startChatBtn" type="button">Go</button>
+        </div>
+        <div id="contacts"></div>
+      </aside>
+      <section id="main">
+        <div id="chatHeader">
+          <div class="hint" id="headerHint">Select or start a conversation</div>
+          <div class="peer" id="peerLabel" hidden></div>
+        </div>
+        <div id="messages">
+          <div id="emptyState">Pick a contact or type a username to start a private conversation.</div>
+        </div>
+        <div id="composerWrap" hidden>
+          <div id="attachPreview">
+            <img id="attachThumb" alt="" hidden />
+            <span class="name" id="attachName"></span>
+            <button type="button" id="clearAttach" aria-label="Remove attachment">×</button>
+          </div>
+          <div id="uploadError"></div>
+          <form id="composer">
+            <input id="fileInput" type="file" accept="image/*,.pdf,.txt,audio/*,video/mp4,video/webm" />
+            <button type="button" id="attachBtn" title="Attach media" aria-label="Attach media">📎</button>
+            <input id="text" type="text" placeholder="Private message…" autocomplete="off" maxlength="2000" />
+            <button type="submit" id="sendBtn" disabled>Send</button>
+          </form>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const loginEl = document.getElementById('login');
+    const shellEl = document.getElementById('shell');
+    const meLabel = document.getElementById('meLabel');
+    const statusEl = document.getElementById('status');
+    const contactsEl = document.getElementById('contacts');
+    const messagesEl = document.getElementById('messages');
+    const emptyState = document.getElementById('emptyState');
+    const composerWrap = document.getElementById('composerWrap');
+    const composer = document.getElementById('composer');
+    const sendBtn = document.getElementById('sendBtn');
+    const attachBtn = document.getElementById('attachBtn');
+    const fileInput = document.getElementById('fileInput');
+    const attachPreview = document.getElementById('attachPreview');
+    const attachThumb = document.getElementById('attachThumb');
+    const attachName = document.getElementById('attachName');
+    const uploadError = document.getElementById('uploadError');
+    const peerLabel = document.getElementById('peerLabel');
+    const headerHint = document.getElementById('headerHint');
+    const peerInput = document.getElementById('peerInput');
+    const authError = document.getElementById('authError');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+
+    const TOKEN_KEY = 'chatAuthToken';
+    const USER_KEY = 'chatAuthUser';
+
+    let me = '';
+    let authToken = '';
+    let peer = null;
+    let stompClient = null;
+    let online = new Set();
+    let contacts = [];
+    let pendingFile = null;
+
+    function showAuthError(msg) {
+      if (!msg) {
+        authError.classList.remove('visible');
+        authError.textContent = '';
+        return;
+      }
+      authError.textContent = msg;
+      authError.classList.add('visible');
+    }
+
+    function showAuthInfo(msg) {
+      const el = document.getElementById('authInfo');
+      if (!msg) {
+        el.classList.remove('visible');
+        el.textContent = '';
+        return;
+      }
+      el.textContent = msg;
+      el.classList.add('visible');
+    }
+
+    function showAuthPanel(name) {
+      document.getElementById('authPanelLogin').hidden = name !== 'login';
+      document.getElementById('authPanelForgot').hidden = name !== 'forgot';
+      document.getElementById('authPanelReset').hidden = name !== 'reset';
+      showAuthError('');
+      if (name === 'login') showAuthInfo('');
+    }
+
+    function formatTime(ts) {
+      return new Date(ts).toLocaleString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' });
+    }
+
+    function clearMessages() {
+      messagesEl.innerHTML = '';
+      messagesEl.appendChild(emptyState);
+      emptyState.hidden = false;
+    }
+
+    function showUploadError(msg) {
+      if (!msg) {
+        uploadError.classList.remove('visible');
+        uploadError.textContent = '';
+        return;
+      }
+      uploadError.textContent = msg;
+      uploadError.classList.add('visible');
+    }
+
+    function clearAttachment() {
+      pendingFile = null;
+      fileInput.value = '';
+      attachPreview.classList.remove('visible');
+      attachThumb.hidden = true;
+      attachThumb.removeAttribute('src');
+      attachName.textContent = '';
+      showUploadError('');
+    }
+
+    function setAttachment(file) {
+      pendingFile = file;
+      attachName.textContent = file.name + ' (' + Math.round(file.size / 1024) + ' KB)';
+      attachPreview.classList.add('visible');
+      showUploadError('');
+      if (file.type && file.type.startsWith('image/')) {
+        const url = URL.createObjectURL(file);
+        attachThumb.src = url;
+        attachThumb.hidden = false;
+        attachThumb.onload = () => URL.revokeObjectURL(url);
+      } else {
+        attachThumb.hidden = true;
+        attachThumb.removeAttribute('src');
+      }
+    }
+
+    function appendBubble(msg) {
+      emptyState.hidden = true;
+      const mine = msg.fromUser === me;
+      const div = document.createElement('div');
+      div.className = 'bubble ' + (mine ? 'mine' : 'theirs');
+      div.dataset.messageId = msg.id || '';
+
+      const type = (msg.messageType || 'TEXT').toUpperCase();
+      if (msg.mediaUrl && (type === 'IMAGE' || (msg.mediaContentType || '').startsWith('image/'))) {
+        const img = document.createElement('img');
+        img.className = 'media';
+        img.src = msg.mediaUrl;
+        img.alt = msg.mediaFileName || 'Image';
+        img.loading = 'lazy';
+        img.addEventListener('click', () => window.open(msg.mediaUrl, '_blank'));
+        div.appendChild(img);
+      } else if (msg.mediaUrl) {
+        const link = document.createElement('a');
+        link.className = 'file-link';
+        link.href = msg.mediaUrl;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = '📄 ' + (msg.mediaFileName || 'Download file');
+        div.appendChild(link);
+      }
+
+      if (msg.text) {
+        const text = document.createElement('div');
+        if (msg.mediaUrl) text.className = 'caption';
+        text.textContent = msg.text;
+        div.appendChild(text);
+      }
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = formatTime(msg.timestamp);
+      div.appendChild(meta);
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function renderContacts() {
+      contactsEl.innerHTML = '';
+      const names = [...new Set(contacts)].filter(n => n && n.toLowerCase() !== me.toLowerCase()).sort((a, b) => a.localeCompare(b));
+      for (const name of names) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'contact' + (peer === name ? ' active' : '');
+        const dot = document.createElement('span');
+        dot.className = 'dot' + (online.has(name) ? ' on' : '');
+        const label = document.createElement('span');
+        label.textContent = name;
+        btn.appendChild(dot);
+        btn.appendChild(label);
+        btn.addEventListener('click', () => openConversation(name));
+        contactsEl.appendChild(btn);
+      }
+    }
+
+    async function refreshContacts() {
+      const res = await fetch('/api/contacts?me=' + encodeURIComponent(me));
+      contacts = await res.json();
+      renderContacts();
+    }
+
+    async function openConversation(name) {
+      peer = name.trim();
+      if (!peer || peer.toLowerCase() === me.toLowerCase()) return;
+      if (!contacts.includes(peer)) contacts.push(peer);
+      renderContacts();
+      peerLabel.hidden = false;
+      peerLabel.textContent = peer;
+      headerHint.hidden = true;
+      composerWrap.hidden = false;
+      shellEl.classList.add('chatting');
+      clearAttachment();
+      clearMessages();
+      emptyState.textContent = 'No messages yet. Say hello.';
+      emptyState.hidden = false;
+      const res = await fetch(
+        '/api/conversation?me=' + encodeURIComponent(me) + '&peer=' + encodeURIComponent(peer)
+      );
+      const history = await res.json();
+      if (history.length) {
+        emptyState.hidden = true;
+        history.forEach(appendBubble);
+      }
+      document.getElementById('text').focus();
+    }
+
+    function maybeShowMessage(msg) {
+      const involvesMe = msg.fromUser === me || msg.toUser === me;
+      if (!involvesMe) return;
+      const other = msg.fromUser === me ? msg.toUser : msg.fromUser;
+      if (!contacts.includes(other)) {
+        contacts.push(other);
+        renderContacts();
+      }
+      if (peer === other) {
+        appendBubble(msg);
+      }
+    }
+
+    function connect() {
+      stompClient = Stomp.client('ws://' + location.host + '/ws');
+      stompClient.debug = () => {};
+      stompClient.connect({ token: authToken }, () => {
+        statusEl.textContent = 'Online';
+        sendBtn.disabled = false;
+        attachBtn.disabled = false;
+        stompClient.subscribe('/user/queue/messages', (frame) => {
+          maybeShowMessage(JSON.parse(frame.body));
+        });
+        stompClient.subscribe('/topic/presence', (frame) => {
+          online = new Set(JSON.parse(frame.body));
+          renderContacts();
+        });
+        refreshContacts();
+        fetch('/api/online').then(r => r.json()).then(list => {
+          online = new Set(list);
+          renderContacts();
+        });
+      }, () => {
+        statusEl.textContent = 'Disconnected — retrying…';
+        sendBtn.disabled = true;
+        attachBtn.disabled = true;
+        setTimeout(connect, 2000);
+      });
+    }
+
+    function enterApp(username, token) {
+      me = username;
+      authToken = token;
+      sessionStorage.setItem(TOKEN_KEY, token);
+      sessionStorage.setItem(USER_KEY, username);
+      meLabel.textContent = me;
+      loginEl.style.display = 'none';
+      shellEl.style.display = 'flex';
+      showAuthError('');
+      connect();
+    }
+
+    async function authRequest(path) {
+      const username = usernameInput.value.trim();
+      const password = passwordInput.value;
+      showAuthError('');
+      if (!username) {
+        showAuthError('Username is required');
+        return;
+      }
+      if (!password) {
+        showAuthError('Password is required');
+        return;
+      }
+      const loginBtn = document.getElementById('loginBtn');
+      const registerBtn = document.getElementById('registerBtn');
+      loginBtn.disabled = true;
+      registerBtn.disabled = true;
+      try {
+        const res = await fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (res.status === 409 || (data.error && /already exists/i.test(data.error))) {
+            showAuthError(data.error || 'User already exists');
+          } else {
+            showAuthError(data.error || 'Authentication failed');
+          }
+          return;
+        }
+        passwordInput.value = '';
+        enterApp(data.username, data.token);
+      } catch (e) {
+        showAuthError('Network error — try again');
+      } finally {
+        loginBtn.disabled = false;
+        registerBtn.disabled = false;
+      }
+    }
+
+    document.getElementById('loginBtn').addEventListener('click', () => authRequest('/api/auth/login'));
+    document.getElementById('registerBtn').addEventListener('click', () => authRequest('/api/auth/register'));
+
+    document.getElementById('showForgotBtn').addEventListener('click', () => {
+      document.getElementById('forgotUsername').value = usernameInput.value.trim();
+      showAuthPanel('forgot');
+    });
+    document.getElementById('backFromForgotBtn').addEventListener('click', () => showAuthPanel('login'));
+    document.getElementById('backFromResetBtn').addEventListener('click', () => showAuthPanel('login'));
+
+    document.getElementById('forgotBtn').addEventListener('click', async () => {
+      const username = document.getElementById('forgotUsername').value.trim();
+      showAuthError('');
+      showAuthInfo('');
+      if (!username) {
+        showAuthError('Username is required');
+        return;
+      }
+      const btn = document.getElementById('forgotBtn');
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/auth/forgot-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showAuthError(data.error || 'Request failed');
+          return;
+        }
+        if (data.resetToken) {
+          document.getElementById('resetTokenInput').value = data.resetToken;
+          showAuthInfo('Reset token issued (copy kept below). Enter a new password.');
+          showAuthPanel('reset');
+          showAuthInfo('Token: ' + data.resetToken);
+        } else {
+          showAuthInfo(data.message || 'If that account exists, a reset token was issued.');
+        }
+      } catch (e) {
+        showAuthError('Network error — try again');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('resetBtn').addEventListener('click', async () => {
+      const token = document.getElementById('resetTokenInput').value.trim();
+      const newPassword = document.getElementById('newPassword').value;
+      showAuthError('');
+      showAuthInfo('');
+      if (!token) {
+        showAuthError('Reset token is required');
+        return;
+      }
+      if (!newPassword || newPassword.length < 6) {
+        showAuthError('Password must be at least 6 characters');
+        return;
+      }
+      const btn = document.getElementById('resetBtn');
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/auth/reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, newPassword })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showAuthError(data.error || 'Reset failed');
+          return;
+        }
+        document.getElementById('newPassword').value = '';
+        document.getElementById('resetTokenInput').value = '';
+        passwordInput.value = '';
+        showAuthPanel('login');
+        showAuthInfo(data.message || 'Password updated. Log in with your new password.');
+      } catch (e) {
+        showAuthError('Network error — try again');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    passwordInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('loginBtn').click();
+    });
+    usernameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') passwordInput.focus();
+    });
+
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { 'X-Auth-Token': authToken }
+        });
+      } catch (_) { /* ignore */ }
+      if (stompClient) {
+        try { stompClient.disconnect(() => {}); } catch (_) { /* ignore */ }
+      }
+      sessionStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(USER_KEY);
+      location.reload();
+    });
+
+    document.getElementById('startChatBtn').addEventListener('click', () => {
+      const name = peerInput.value.trim();
+      if (name) {
+        peerInput.value = '';
+        openConversation(name);
+      }
+    });
+
+    peerInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        document.getElementById('startChatBtn').click();
+      }
+    });
+
+    attachBtn.addEventListener('click', () => fileInput.click());
+    document.getElementById('clearAttach').addEventListener('click', clearAttachment);
+
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      if (file.size > 10 * 1024 * 1024) {
+        showUploadError('File must be 10 MB or smaller');
+        fileInput.value = '';
+        return;
+      }
+      setAttachment(file);
+    });
+
+    async function uploadMedia(file) {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch('/api/media', { method: 'POST', body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || 'Upload failed');
+      }
+      return data;
+    }
+
+    composer.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!stompClient || !stompClient.connected || !peer) return;
+      const text = document.getElementById('text').value.trim();
+      const file = pendingFile;
+      if (!text && !file) return;
+
+      sendBtn.disabled = true;
+      attachBtn.disabled = true;
+      showUploadError('');
+
+      try {
+        let payload = { to: peer, text };
+        if (file) {
+          const uploaded = await uploadMedia(file);
+          payload.mediaUrl = uploaded.url;
+          payload.mediaContentType = uploaded.contentType;
+          payload.mediaFileName = uploaded.fileName;
+          payload.messageType = uploaded.messageType;
+        }
+        stompClient.send('/app/chat', {}, JSON.stringify(payload));
+        document.getElementById('text').value = '';
+        clearAttachment();
+      } catch (err) {
+        showUploadError(err.message || 'Failed to send media');
+      } finally {
+        sendBtn.disabled = false;
+        attachBtn.disabled = false;
+      }
+    });
+
+    // No silent restore without password — session token alone is ok only after explicit login this tab.
+    // If you want "remember me", we could restore token from sessionStorage; for security we require password each full load unless token present.
+    const savedToken = sessionStorage.getItem(TOKEN_KEY);
+    const savedUser = sessionStorage.getItem(USER_KEY);
+    if (savedToken && savedUser) {
+      enterApp(savedUser, savedToken);
+    }
+  </script>
+</body>
+</html>
