@@ -1,0 +1,13 @@
+target/
+uploads/
+.idea/
+.playwright-mcp/
+*.iml
+.DS_Store
+*.log
+
+# e2e / local screenshots
+*.png
+alice-*.png
+bob-*.png
+e2e-*.png

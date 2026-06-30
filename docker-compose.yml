@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: chatapp
+      POSTGRES_USER: chat
+      POSTGRES_PASSWORD: chat
+    volumes:
+      - chat_pg_data:/var/lib/postgresql/data
+
+volumes:
+  chat_pg_data:
