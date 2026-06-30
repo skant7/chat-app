@@ -6,8 +6,16 @@ uploads/
 .DS_Store
 *.log
 
-# e2e / local screenshots
-*.png
-alice-*.png
-bob-*.png
-e2e-*.png
+# e2e node
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/
+e2e/blob-report/
+e2e/playwright/.cache/
+
+# local screenshots (keep e2e fixtures)
+/alice-*.png
+/bob-*.png
+/e2e-*.png
+/*.png
+!e2e/tests/fixtures/**/*.png
