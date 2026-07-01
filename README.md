@@ -53,6 +53,8 @@ mvn spring-boot:run
 
 Open http://localhost:8080 — **register** or **log in** with username + password in two browser profiles/tabs. Start a chat with the other person’s name; messages stay private to that pair.
 
+**Swagger UI** (REST only): http://localhost:8080/swagger-ui.html — OpenAPI JSON at `/v3/api-docs`. STOMP/WebSocket messaging is not listed there.
+
 ## CI and e2e tests
 
 GitHub Actions (`.github/workflows/ci.yml`) runs:

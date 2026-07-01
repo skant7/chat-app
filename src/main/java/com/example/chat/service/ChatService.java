@@ -83,7 +83,8 @@ public class ChatService {
                 continue;
             }
             repository.findById(id).ifPresent(message -> {
-                if (!recipient.equalsIgnoreCase(message.getToUser())) {
+                // Delivery receipts apply to DMs only (group messages have null toUser)
+                if (message.getToUser() == null || !recipient.equalsIgnoreCase(message.getToUser())) {
                     return;
                 }
                 if (message.getDeliveredAt() != null) {
@@ -125,6 +126,8 @@ public class ChatService {
 
     private void deliverToParticipants(ChatMessage message) {
         messagingTemplate.convertAndSendToUser(message.getFromUser(), USER_QUEUE, message);
-        messagingTemplate.convertAndSendToUser(message.getToUser(), USER_QUEUE, message);
+        if (message.getToUser() != null && !message.getToUser().isBlank()) {
+            messagingTemplate.convertAndSendToUser(message.getToUser(), USER_QUEUE, message);
+        }
     }
 }
