@@ -1,5 +1,6 @@
 package com.example.chat.controller;
 
+import com.example.chat.dto.chat.DeliveryAckCommand;
 import com.example.chat.dto.chat.SendMessageCommand;
 import com.example.chat.model.ChatMessage;
 import com.example.chat.service.ChatService;
@@ -36,6 +37,19 @@ public class ChatController {
             return;
         }
         chatService.send(SendMessageCommand.fromPayload(principal.getName(), payload));
+    }
+
+    /**
+     * Delivery receipt. Client sends to /app/chat.ack with { messageId } or { messageIds: [...] }.
+     * Only the message recipient may acknowledge.
+     */
+    @MessageMapping("/chat.ack")
+    public void acknowledgeDelivery(@Payload Map<String, Object> payload, Principal principal) {
+        if (principal == null) {
+            return;
+        }
+        DeliveryAckCommand cmd = DeliveryAckCommand.fromPayload(payload);
+        chatService.acknowledgeDelivered(principal.getName(), cmd.messageIds());
     }
 
     @GetMapping("/api/conversation")
