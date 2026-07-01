@@ -18,8 +18,13 @@ public class ChatMessage {
     @Column(name = "from_user", nullable = false, length = 100)
     private String fromUser;
 
-    @Column(name = "to_user", nullable = false, length = 100)
+    /** Peer for DMs; null when this is a group message. */
+    @Column(name = "to_user", length = 100)
     private String toUser;
+
+    /** Group for group messages; null when this is a DM. */
+    @Column(name = "group_id")
+    private Long groupId;
 
     /** Caption for media, or the full body for text messages (empty when media-only). */
     @Column(nullable = false, length = 2000)
@@ -72,6 +77,21 @@ public class ChatMessage {
         m.timestamp = System.currentTimeMillis();
         m.status = "SENT";
         m.deliveredAt = null;
+        m.groupId = null;
+        return m;
+    }
+
+    /** Factory for group messages. */
+    public static ChatMessage createGroup(
+            String fromUser,
+            Long groupId,
+            String text,
+            String messageType,
+            String mediaUrl,
+            String mediaContentType,
+            String mediaFileName) {
+        ChatMessage m = create(fromUser, null, text, messageType, mediaUrl, mediaContentType, mediaFileName);
+        m.groupId = groupId;
         return m;
     }
 
@@ -97,6 +117,14 @@ public class ChatMessage {
 
     public void setToUser(String toUser) {
         this.toUser = toUser;
+    }
+
+    public Long getGroupId() {
+        return groupId;
+    }
+
+    public void setGroupId(Long groupId) {
+        this.groupId = groupId;
     }
 
     public String getText() {
