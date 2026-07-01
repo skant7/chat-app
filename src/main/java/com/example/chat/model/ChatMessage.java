@@ -41,6 +41,14 @@ public class ChatMessage {
     @Column(nullable = false)
     private long timestamp;
 
+    /** SENT or DELIVERED (recipient client acknowledged). */
+    @Column(nullable = false, length = 20)
+    private String status = "SENT";
+
+    /** Null until recipient ACKs delivery. */
+    @Column(name = "delivered_at")
+    private Long deliveredAt;
+
     public ChatMessage() {
     }
 
@@ -62,6 +70,8 @@ public class ChatMessage {
         m.mediaContentType = mediaContentType;
         m.mediaFileName = mediaFileName;
         m.timestamp = System.currentTimeMillis();
+        m.status = "SENT";
+        m.deliveredAt = null;
         return m;
     }
 
@@ -135,5 +145,21 @@ public class ChatMessage {
 
     public void setTimestamp(long timestamp) {
         this.timestamp = timestamp;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public Long getDeliveredAt() {
+        return deliveredAt;
+    }
+
+    public void setDeliveredAt(Long deliveredAt) {
+        this.deliveredAt = deliveredAt;
     }
 }

@@ -101,6 +101,43 @@ test.describe('Private chat e2e', () => {
     await bobPage.close();
   });
 
+  test('shows sent then delivered receipt when peer receives message', async ({ browser }) => {
+    const a = `AliceRcpt_${Date.now()}`;
+    const b = `BobRcpt_${Date.now()}`;
+    const alicePage = await browser.newPage();
+    const bobPage = await browser.newPage();
+
+    await register(alicePage, a, password);
+    await register(bobPage, b, password);
+
+    await alicePage.getByPlaceholder('Message someone…').fill(b);
+    await alicePage.getByRole('button', { name: 'Go' }).click();
+    await expect(alicePage.locator('#peerLabel')).toHaveText(b);
+
+    const text = `receipt-check ${Date.now()}`;
+    await alicePage.getByPlaceholder('Private message…').fill(text);
+    await alicePage.getByRole('button', { name: 'Send' }).click();
+    await expect(alicePage.getByText(text)).toBeVisible();
+
+    // Alice's bubble shows a receipt (✓ sent, upgrades to ✓✓ when Bob gets it)
+    const aliceBubble = alicePage.locator('.bubble.mine').filter({ hasText: text });
+    await expect(aliceBubble.locator('.receipt')).toBeVisible();
+
+    // Bob opens chat and receives the message (triggers delivery ACK)
+    await bobPage.getByRole('button', { name: a }).click();
+    await expect(bobPage.getByText(text)).toBeVisible();
+
+    // Alice should see delivered receipt (double tick)
+    await expect(aliceBubble.locator('.receipt')).toHaveAttribute('data-status', 'DELIVERED', {
+      timeout: 15_000,
+    });
+    await expect(aliceBubble.locator('.receipt')).toHaveText('✓✓');
+    await expect(aliceBubble.locator('.receipt')).toHaveAttribute('aria-label', 'Delivered');
+
+    await alicePage.close();
+    await bobPage.close();
+  });
+
   test('duplicate registration returns conflict', async ({ request, baseURL }) => {
     const user = `DupCI_${Date.now()}`;
     const first = await request.post(`${baseURL}/api/auth/register`, {
