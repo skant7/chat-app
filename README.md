@@ -40,11 +40,33 @@ docker compose up -d
 
 ## Run the app
 
+Override DB credentials with env vars if needed (CI uses `chat` / `chat` from Docker Compose):
+
 ```bash
+# optional when using docker compose postgres:
+# export SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/chatapp
+# export SPRING_DATASOURCE_USERNAME=chat
+# export SPRING_DATASOURCE_PASSWORD=chat
+
 mvn spring-boot:run
 ```
 
-Open http://localhost:8080 — use **different display names** in two browser profiles/tabs. Start a chat with the other person’s name; messages stay private to that pair.
+Open http://localhost:8080 — **register** or **log in** with username + password in two browser profiles/tabs. Start a chat with the other person’s name; messages stay private to that pair.
+
+## CI and e2e tests
+
+GitHub Actions (`.github/workflows/ci.yml`) runs:
+
+1. **Unit tests** — `mvn test`
+2. **E2E** — Postgres service, app JAR, [Playwright](https://playwright.dev) browser tests under `e2e/`
+
+Run Playwright locally (app must be up on port 8080):
+
+```bash
+mvn -DskipTests package
+# start app with DB available, then:
+cd e2e && npm install && npx playwright install chromium && npm test
+```
 
 ## How it works
 
