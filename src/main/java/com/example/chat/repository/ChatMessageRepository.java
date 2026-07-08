@@ -2,6 +2,7 @@ package com.example.chat.repository;
 
 import com.example.chat.model.ChatMessage;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -37,4 +38,15 @@ public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> 
             ORDER BY m.timestamp ASC
             """)
     List<ChatMessage> findByGroupIdOrderByTimestampAsc(@Param("groupId") Long groupId);
+
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE ChatMessage m SET m.fromUser = :newUsername WHERE LOWER(m.fromUser) = LOWER(:oldUsername)")
+    int renameFromUser(@Param("oldUsername") String oldUsername, @Param("newUsername") String newUsername);
+
+    @Modifying(clearAutomatically = true)
+    @Query("""
+            UPDATE ChatMessage m SET m.toUser = :newUsername
+            WHERE m.toUser IS NOT NULL AND LOWER(m.toUser) = LOWER(:oldUsername)
+            """)
+    int renameToUser(@Param("oldUsername") String oldUsername, @Param("newUsername") String newUsername);
 }

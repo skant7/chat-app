@@ -23,4 +23,8 @@ public interface AuthSessionRepository extends JpaRepository<AuthSession, Long> 
     @Modifying(clearAutomatically = true)
     @Query("DELETE FROM AuthSession s WHERE s.expiresAt < :now")
     void deleteExpired(@Param("now") long now);
+
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE AuthSession s SET s.username = :newUsername WHERE LOWER(s.username) = LOWER(:oldUsername)")
+    int updateUsername(@Param("oldUsername") String oldUsername, @Param("newUsername") String newUsername);
 }

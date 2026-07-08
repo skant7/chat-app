@@ -18,7 +18,7 @@ public class OpenApiConfig {
                 .info(new Info()
                         .title("Private Chat API")
                         .description("""
-                                REST API for auth, contacts, conversation history, and media.
+                                REST API for auth, profile, contacts, conversation history, groups, and media.
                                 Real-time messaging uses STOMP over WebSocket at /ws (not shown here).
                                 """.stripIndent().trim())
                         .version("1.0"))
