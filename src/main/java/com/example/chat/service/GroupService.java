@@ -9,17 +9,22 @@ import com.example.chat.exception.AuthException;
 import com.example.chat.model.ChatGroup;
 import com.example.chat.model.ChatMessage;
 import com.example.chat.model.GroupMember;
+import com.example.chat.model.UserAccount;
 import com.example.chat.repository.ChatGroupRepository;
 import com.example.chat.repository.ChatMessageRepository;
 import com.example.chat.repository.GroupMemberRepository;
+import com.example.chat.repository.UserAccountRepository;
 import com.example.chat.util.Usernames;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.LinkedHashSet;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Set;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 
 @Service
 public class GroupService {
@@ -34,25 +39,27 @@ public class GroupService {
     private final ChatGroupRepository groups;
     private final GroupMemberRepository members;
     private final ChatMessageRepository messages;
+    private final UserAccountRepository users;
     private final SimpMessagingTemplate messagingTemplate;
 
     public GroupService(
             ChatGroupRepository groups,
             GroupMemberRepository members,
             ChatMessageRepository messages,
+            UserAccountRepository users,
             SimpMessagingTemplate messagingTemplate) {
         this.groups = groups;
         this.members = members;
         this.messages = messages;
+        this.users = users;
         this.messagingTemplate = messagingTemplate;
     }
 
     @Transactional
     public GroupResponse create(String creatorUsername, CreateGroupRequest request) {
-        String creator = Usernames.normalize(creatorUsername);
-        if (creator.isEmpty()) {
-            throw new AuthException("Not authenticated");
-        }
+        String creator = resolveCanonicalUsername(creatorUsername)
+                .orElseThrow(() -> new AuthException("Not authenticated"));
+
         String name = request == null ? "" : request.nameOrEmpty();
         if (name.isEmpty()) {
             throw new AuthException("Group name is required");
@@ -61,26 +68,46 @@ public class GroupService {
             throw new AuthException("Group name is too long");
         }
 
-        Set<String> memberNames = new LinkedHashSet<>();
-        memberNames.add(creator);
+        // Key by lower-case so "Bob"/"bob" collapse; value is registered casing for STOMP principals.
+        Map<String, String> memberNames = new LinkedHashMap<>();
+        memberNames.put(creator.toLowerCase(Locale.ROOT), creator);
         if (request != null) {
             for (String raw : request.membersOrEmpty()) {
-                String n = Usernames.normalize(raw);
-                if (!n.isEmpty() && !n.equalsIgnoreCase(creator)) {
-                    memberNames.add(n);
+                String normalized = Usernames.normalize(raw);
+                if (normalized.isEmpty()) {
+                    continue;
                 }
+                String canonical = resolveCanonicalUsername(normalized)
+                        .orElseThrow(() -> new AuthException("Unknown user: " + normalized));
+                if (canonical.equalsIgnoreCase(creator)) {
+                    continue;
+                }
+                memberNames.putIfAbsent(canonical.toLowerCase(Locale.ROOT), canonical);
             }
         }
         if (memberNames.size() > MAX_MEMBERS) {
             throw new AuthException("Group cannot have more than " + MAX_MEMBERS + " members");
         }
 
+        List<String> orderedMembers = new ArrayList<>(memberNames.values());
         ChatGroup group = groups.save(new ChatGroup(name, creator));
-        for (String username : memberNames) {
+        for (String username : orderedMembers) {
             String role = username.equalsIgnoreCase(creator) ? ROLE_ADMIN : ROLE_MEMBER;
             members.save(new GroupMember(group.getId(), username, role));
         }
-        return GroupResponse.from(group, memberNames.size());
+        return GroupResponse.from(group, orderedMembers.size());
+    }
+
+    /**
+     * Resolves a client-supplied name to the exact username stored on {@link UserAccount}
+     * (session/STOMP principal casing). Empty input yields empty optional.
+     */
+    private Optional<String> resolveCanonicalUsername(String username) {
+        String normalized = Usernames.normalize(username);
+        if (normalized.isEmpty()) {
+            return Optional.empty();
+        }
+        return users.findByUsernameIgnoreCase(normalized).map(UserAccount::getUsername);
     }
 
     @Transactional(readOnly = true)
