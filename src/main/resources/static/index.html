@@ -103,7 +103,7 @@
     }
     #sidebar header strong { display: block; font-size: 1rem; flex: 1; }
     #sidebar header span { color: var(--muted); width: 100%; }
-    #logoutBtn {
+    #logoutBtn, #profileBtn {
       border: 1px solid var(--border);
       background: transparent;
       color: var(--muted);
@@ -112,7 +112,67 @@
       font-size: 0.75rem;
       cursor: pointer;
     }
-    #logoutBtn:hover { color: var(--text); }
+    #logoutBtn:hover, #profileBtn:hover { color: var(--text); }
+    #headerActions { display: flex; gap: 0.35rem; align-items: center; }
+    #profilePanel {
+      display: none;
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+    #profilePanel.open { display: block; }
+    #profilePanel label {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+    #profilePanel input, #profilePanel textarea {
+      width: 100%;
+      padding: 0.45rem 0.55rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      margin-bottom: 0.65rem;
+      resize: vertical;
+    }
+    #profilePanel textarea { min-height: 3.2rem; }
+    #profileActions { display: flex; gap: 0.4rem; }
+    #profileSaveBtn, #profileCancelBtn {
+      flex: 1;
+      padding: 0.45rem 0.6rem;
+      border-radius: 6px;
+      border: none;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #profileSaveBtn { background: var(--accent); color: #0b1220; }
+    #profileCancelBtn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    #profileError {
+      display: none;
+      color: var(--danger);
+      font-size: 0.75rem;
+      margin: 0 0 0.5rem;
+      line-height: 1.3;
+    }
+    #profileError.visible { display: block; }
+    #meAbout {
+      color: var(--muted);
+      font-size: 0.75rem;
+      width: 100%;
+      line-height: 1.3;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #meAbout:empty { display: none; }
     #newChat {
       padding: 0.75rem;
       border-bottom: 1px solid var(--border);
@@ -176,7 +236,22 @@
     }
     .bubble.mine { align-self: flex-end; background: var(--mine); border-bottom-right-radius: 4px; }
     .bubble.theirs { align-self: flex-start; background: var(--theirs); border-bottom-left-radius: 4px; }
-    .bubble .meta { font-size: 0.7rem; color: var(--muted); margin-top: 0.25rem; }
+    .bubble .meta {
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-top: 0.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      justify-content: flex-end;
+    }
+    .bubble.theirs .meta { justify-content: flex-start; }
+    .bubble .receipt {
+      font-size: 0.7rem;
+      letter-spacing: -0.05em;
+      color: var(--muted);
+    }
+    .bubble .receipt.delivered { color: var(--accent); }
     .bubble img.media {
       display: block;
       max-width: 100%;
@@ -348,9 +423,24 @@
       <aside id="sidebar">
         <header>
           <strong id="meLabel"></strong>
-          <button type="button" id="logoutBtn">Log out</button>
+          <div id="headerActions">
+            <button type="button" id="profileBtn" title="Edit profile">Profile</button>
+            <button type="button" id="logoutBtn">Log out</button>
+          </div>
+          <span id="meAbout"></span>
           <span id="status">Connecting…</span>
         </header>
+        <div id="profilePanel" aria-label="Edit profile">
+          <div id="profileError" role="alert"></div>
+          <label for="profileUsername">Username</label>
+          <input id="profileUsername" type="text" maxlength="40" autocomplete="username" />
+          <label for="profileAbout">About</label>
+          <textarea id="profileAbout" maxlength="200" placeholder="A short bio (optional)"></textarea>
+          <div id="profileActions">
+            <button type="button" id="profileSaveBtn">Save</button>
+            <button type="button" id="profileCancelBtn">Cancel</button>
+          </div>
+        </div>
         <div id="newChat">
           <input id="peerInput" type="text" placeholder="Message someone…" maxlength="40" />
           <button id="startChatBtn" type="button">Go</button>
@@ -493,12 +583,45 @@
       }
     }
 
+    function receiptLabel(msg) {
+      const delivered = msg.deliveredAt != null || (msg.status || '').toUpperCase() === 'DELIVERED';
+      return delivered ? '✓✓' : '✓';
+    }
+
+    function updateBubbleReceipt(msg) {
+      if (!msg || !msg.id) return;
+      const div = messagesEl.querySelector('.bubble[data-message-id="' + msg.id + '"]');
+      if (!div) return;
+      const receipt = div.querySelector('.receipt');
+      if (!receipt) return;
+      const delivered = msg.deliveredAt != null || (msg.status || '').toUpperCase() === 'DELIVERED';
+      receipt.textContent = delivered ? '✓✓' : '✓';
+      receipt.classList.toggle('delivered', delivered);
+      receipt.title = delivered ? 'Delivered' : 'Sent';
+      receipt.setAttribute('aria-label', delivered ? 'Delivered' : 'Sent');
+      receipt.dataset.status = delivered ? 'DELIVERED' : 'SENT';
+    }
+
+    function ackDelivery(messageIds) {
+      if (!stompClient || !stompClient.connected || !messageIds || !messageIds.length) return;
+      const ids = [...new Set(messageIds.filter(Boolean))];
+      if (!ids.length) return;
+      stompClient.send('/app/chat.ack', {}, JSON.stringify({ messageIds: ids }));
+    }
+
     function appendBubble(msg) {
+      if (msg && msg.id) {
+        const existing = messagesEl.querySelector('.bubble[data-message-id="' + msg.id + '"]');
+        if (existing) {
+          updateBubbleReceipt(msg);
+          return;
+        }
+      }
       emptyState.hidden = true;
       const mine = msg.fromUser === me;
       const div = document.createElement('div');
       div.className = 'bubble ' + (mine ? 'mine' : 'theirs');
-      div.dataset.messageId = msg.id || '';
+      if (msg.id != null) div.dataset.messageId = String(msg.id);
 
       const type = (msg.messageType || 'TEXT').toUpperCase();
       if (msg.mediaUrl && (type === 'IMAGE' || (msg.mediaContentType || '').startsWith('image/'))) {
@@ -528,10 +651,27 @@
 
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = formatTime(msg.timestamp);
+      const time = document.createElement('span');
+      time.textContent = formatTime(msg.timestamp);
+      meta.appendChild(time);
+      if (mine) {
+        const receipt = document.createElement('span');
+        receipt.className = 'receipt';
+        const delivered = msg.deliveredAt != null || (msg.status || '').toUpperCase() === 'DELIVERED';
+        receipt.textContent = delivered ? '✓✓' : '✓';
+        receipt.classList.toggle('delivered', delivered);
+        receipt.title = delivered ? 'Delivered' : 'Sent';
+        receipt.setAttribute('aria-label', delivered ? 'Delivered' : 'Sent');
+        receipt.dataset.status = delivered ? 'DELIVERED' : 'SENT';
+        meta.appendChild(receipt);
+      }
       div.appendChild(meta);
       messagesEl.appendChild(div);
       messagesEl.scrollTop = messagesEl.scrollHeight;
+
+      if (!mine && msg.id && msg.toUser === me) {
+        ackDelivery([msg.id]);
+      }
     }
 
     function renderContacts() {
@@ -579,6 +719,10 @@
       if (history.length) {
         emptyState.hidden = true;
         history.forEach(appendBubble);
+        const pendingAck = history
+          .filter(m => m.toUser === me && m.id && m.deliveredAt == null)
+          .map(m => m.id);
+        ackDelivery(pendingAck);
       }
       document.getElementById('text').focus();
     }
@@ -591,8 +735,14 @@
         contacts.push(other);
         renderContacts();
       }
-      if (peer === other) {
+      if (peer === other || (msg.fromUser === me && peer === msg.toUser)) {
         appendBubble(msg);
+      } else if (msg.fromUser === me && msg.id) {
+        updateBubbleReceipt(msg);
+      }
+      // Recipient got a live message while not viewing that chat — still ACK delivery
+      if (msg.toUser === me && msg.fromUser !== me && msg.id && peer !== other) {
+        ackDelivery([msg.id]);
       }
     }
 
@@ -632,8 +782,112 @@
       loginEl.style.display = 'none';
       shellEl.style.display = 'flex';
       showAuthError('');
+      loadProfile();
       connect();
     }
+
+    function showProfileError(msg) {
+      const el = document.getElementById('profileError');
+      if (!msg) {
+        el.classList.remove('visible');
+        el.textContent = '';
+        return;
+      }
+      el.textContent = msg;
+      el.classList.add('visible');
+    }
+
+    function setAboutLabel(about) {
+      const el = document.getElementById('meAbout');
+      const text = (about || '').trim();
+      el.textContent = text;
+      el.title = text;
+    }
+
+    async function loadProfile() {
+      try {
+        const res = await fetch('/api/profile', {
+          headers: { 'X-Auth-Token': authToken }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.username) {
+          me = data.username;
+          meLabel.textContent = me;
+          sessionStorage.setItem(USER_KEY, me);
+        }
+        setAboutLabel(data.about);
+      } catch (_) { /* ignore */ }
+    }
+
+    function openProfilePanel() {
+      document.getElementById('profileUsername').value = me;
+      document.getElementById('profileAbout').value = document.getElementById('meAbout').textContent || '';
+      showProfileError('');
+      document.getElementById('profilePanel').classList.add('open');
+    }
+
+    function closeProfilePanel() {
+      document.getElementById('profilePanel').classList.remove('open');
+      showProfileError('');
+    }
+
+    async function saveProfile() {
+      const username = document.getElementById('profileUsername').value.trim();
+      const about = document.getElementById('profileAbout').value;
+      showProfileError('');
+      if (!username) {
+        showProfileError('Username is required');
+        return;
+      }
+      const btn = document.getElementById('profileSaveBtn');
+      btn.disabled = true;
+      const oldMe = me;
+      try {
+        const res = await fetch('/api/profile', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Auth-Token': authToken
+          },
+          body: JSON.stringify({ username, about })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showProfileError(data.error || 'Could not save profile');
+          return;
+        }
+        me = data.username;
+        meLabel.textContent = me;
+        sessionStorage.setItem(USER_KEY, me);
+        setAboutLabel(data.about);
+        closeProfilePanel();
+        if (oldMe !== me) {
+          // STOMP principal is fixed at CONNECT; reconnect under the new name.
+          if (stompClient) {
+            try { stompClient.disconnect(() => {}); } catch (_) { /* ignore */ }
+            stompClient = null;
+          }
+          if (peer && peer.toLowerCase() === oldMe.toLowerCase()) {
+            peer = me;
+          }
+          connect();
+          refreshContacts();
+        }
+      } catch (_) {
+        showProfileError('Network error — try again');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('profileBtn').addEventListener('click', () => {
+      const panel = document.getElementById('profilePanel');
+      if (panel.classList.contains('open')) closeProfilePanel();
+      else openProfilePanel();
+    });
+    document.getElementById('profileCancelBtn').addEventListener('click', closeProfilePanel);
+    document.getElementById('profileSaveBtn').addEventListener('click', saveProfile);
 
     async function authRequest(path) {
       const username = usernameInput.value.trim();

@@ -36,6 +36,19 @@ public class PresenceService {
         broadcast();
     }
 
+    /** If the user is online under {@code oldUsername}, re-key presence to {@code newUsername}. */
+    public void rename(String oldUsername, String newUsername) {
+        String oldName = Usernames.normalize(oldUsername);
+        String newName = Usernames.normalize(newUsername);
+        if (oldName.isEmpty() || newName.isEmpty() || oldName.equals(newName)) {
+            return;
+        }
+        if (online.remove(oldName)) {
+            online.add(newName);
+            broadcast();
+        }
+    }
+
     public Set<String> onlineUsers() {
         return Set.copyOf(online);
     }

@@ -53,6 +53,8 @@ mvn spring-boot:run
 
 Open http://localhost:8080 — **register** or **log in** with username + password in two browser profiles/tabs. Start a chat with the other person’s name; messages stay private to that pair.
 
+**Swagger UI** (REST only): http://localhost:8080/swagger-ui.html — OpenAPI JSON at `/v3/api-docs`. STOMP/WebSocket messaging is not listed there.
+
 ## CI and e2e tests
 
 GitHub Actions (`.github/workflows/ci.yml`) runs:
@@ -73,6 +75,7 @@ cd e2e && npm install && npx playwright install chromium && npm test
 1. **Register** (`POST /api/auth/register`) or **log in** (`POST /api/auth/login`) with username + password (BCrypt). Response includes a session `token`.
 2. STOMP `CONNECT` must send header `token` (session from login); the server resolves the principal from `auth_sessions`. Username-only connect is rejected.
 3. **Password reset:** `POST /api/auth/forgot-password` `{ username }` issues a one-time token (returned in JSON when `chat.auth.return-reset-token=true`, since there is no email). Then `POST /api/auth/reset-password` `{ token, newPassword }`. Logged-in users can also `POST /api/auth/change-password` with `X-Auth-Token` and `{ currentPassword, newPassword }`. Reset/change revoke all sessions.
+4. **Delivery receipts:** New messages are `SENT`. Recipients ACK via STOMP `/app/chat.ack` with `{ messageId }` or `{ messageIds: [...] }`; server sets `deliveredAt` / `DELIVERED` and pushes the updated message on `/user/queue/messages`. Sender UI shows ✓ then ✓✓.
 3. Send DMs to `/app/chat` with `{ "to": "…", "text": "…" }`, optionally after uploading with `POST /api/media` and including `mediaUrl`, `mediaContentType`, `mediaFileName`, `messageType` (`IMAGE` / `FILE`).
 4. Server persists the message and delivers it only via `convertAndSendToUser` to sender and recipient queues.
 5. History: `GET /api/conversation?me=…&peer=…` returns only that pair’s messages (including media metadata).

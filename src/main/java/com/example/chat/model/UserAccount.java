@@ -22,6 +22,9 @@ public class UserAccount {
     @Column(name = "password_hash", nullable = false, length = 100)
     private String passwordHash;
 
+    @Column(nullable = false, length = 200)
+    private String about = "";
+
     @Column(name = "created_at", nullable = false)
     private long createdAt;
 
@@ -31,6 +34,7 @@ public class UserAccount {
     public UserAccount(String username, String passwordHash) {
         this.username = username;
         this.passwordHash = passwordHash;
+        this.about = "";
         this.createdAt = System.currentTimeMillis();
     }
 
@@ -56,6 +60,14 @@ public class UserAccount {
 
     public void setPasswordHash(String passwordHash) {
         this.passwordHash = passwordHash;
+    }
+
+    public String getAbout() {
+        return about;
+    }
+
+    public void setAbout(String about) {
+        this.about = about != null ? about : "";
     }
 
     public long getCreatedAt() {

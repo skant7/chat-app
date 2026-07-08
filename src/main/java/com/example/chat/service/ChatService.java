@@ -9,6 +9,7 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -65,6 +66,41 @@ public class ChatService {
         return message;
     }
 
+    /**
+     * Recipient acknowledges delivery of one or more messages.
+     * Notifies sender (and recipient) with updated message payloads.
+     */
+    @Transactional
+    public List<ChatMessage> acknowledgeDelivered(String recipientUsername, List<Long> messageIds) {
+        String recipient = Usernames.normalize(recipientUsername);
+        if (recipient.isEmpty() || messageIds == null || messageIds.isEmpty()) {
+            return List.of();
+        }
+        List<ChatMessage> updated = new ArrayList<>();
+        long now = System.currentTimeMillis();
+        for (Long id : messageIds) {
+            if (id == null) {
+                continue;
+            }
+            repository.findById(id).ifPresent(message -> {
+                // Delivery receipts apply to DMs only (group messages have null toUser)
+                if (message.getToUser() == null || !recipient.equalsIgnoreCase(message.getToUser())) {
+                    return;
+                }
+                if (message.getDeliveredAt() != null) {
+                    updated.add(message);
+                    return;
+                }
+                message.setDeliveredAt(now);
+                message.setStatus("DELIVERED");
+                ChatMessage saved = repository.save(message);
+                updated.add(saved);
+                deliverToParticipants(saved);
+            });
+        }
+        return List.copyOf(updated);
+    }
+
     @Transactional(readOnly = true)
     public List<ChatMessage> conversation(String a, String b) {
         return repository.findConversation(Usernames.normalize(a), Usernames.normalize(b));
@@ -90,6 +126,8 @@ public class ChatService {
 
     private void deliverToParticipants(ChatMessage message) {
         messagingTemplate.convertAndSendToUser(message.getFromUser(), USER_QUEUE, message);
-        messagingTemplate.convertAndSendToUser(message.getToUser(), USER_QUEUE, message);
+        if (message.getToUser() != null && !message.getToUser().isBlank()) {
+            messagingTemplate.convertAndSendToUser(message.getToUser(), USER_QUEUE, message);
+        }
     }
 }
