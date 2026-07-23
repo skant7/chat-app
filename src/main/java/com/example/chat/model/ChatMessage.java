@@ -6,9 +6,14 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 @Entity
-@Table(name = "chat_messages")
+@Table(
+        name = "chat_messages",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_chat_messages_from_client_msg_id",
+                columnNames = {"from_user", "client_message_id"}))
 public class ChatMessage {
 
     @Id
@@ -20,6 +25,14 @@ public class ChatMessage {
 
     @Column(name = "to_user", nullable = false, length = 100)
     private String toUser;
+
+    /**
+     * Client-generated idempotency key (STOMP payload {@code clientMessageId}).
+     * Unique per sender so retries do not insert duplicate rows.
+     * Legacy rows are backfilled by Flyway V2 ({@code legacy-<id>}).
+     */
+    @Column(name = "client_message_id", nullable = false, length = 64)
+    private String clientMessageId;
 
     /** Caption for media, or the full body for text messages (empty when media-only). */
     @Column(nullable = false, length = 2000)
@@ -41,10 +54,20 @@ public class ChatMessage {
     @Column(nullable = false)
     private long timestamp;
 
+    /** SENT, DELIVERED, or READ (forward-only). */
+    @Column(nullable = false, length = 20)
+    private String status = "SENT";
+
+    @Column(name = "delivered_at")
+    private Long deliveredAt;
+
+    @Column(name = "read_at")
+    private Long readAt;
+
     public ChatMessage() {
     }
 
-    /** Factory for new messages (timestamp = now). */
+    /** Factory for new messages (timestamp = now, status = SENT). */
     public static ChatMessage create(
             String fromUser,
             String toUser,
@@ -52,7 +75,8 @@ public class ChatMessage {
             String messageType,
             String mediaUrl,
             String mediaContentType,
-            String mediaFileName) {
+            String mediaFileName,
+            String clientMessageId) {
         ChatMessage m = new ChatMessage();
         m.fromUser = fromUser;
         m.toUser = toUser;
@@ -61,7 +85,12 @@ public class ChatMessage {
         m.mediaUrl = mediaUrl;
         m.mediaContentType = mediaContentType;
         m.mediaFileName = mediaFileName;
+        if (clientMessageId == null || clientMessageId.isBlank()) {
+            throw new IllegalArgumentException("clientMessageId is required");
+        }
+        m.clientMessageId = clientMessageId.trim();
         m.timestamp = System.currentTimeMillis();
+        m.status = "SENT";
         return m;
     }
 
@@ -135,5 +164,37 @@ public class ChatMessage {
 
     public void setTimestamp(long timestamp) {
         this.timestamp = timestamp;
+    }
+
+    public String getClientMessageId() {
+        return clientMessageId;
+    }
+
+    public void setClientMessageId(String clientMessageId) {
+        this.clientMessageId = clientMessageId;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public Long getDeliveredAt() {
+        return deliveredAt;
+    }
+
+    public void setDeliveredAt(Long deliveredAt) {
+        this.deliveredAt = deliveredAt;
+    }
+
+    public Long getReadAt() {
+        return readAt;
+    }
+
+    public void setReadAt(Long readAt) {
+        this.readAt = readAt;
     }
 }

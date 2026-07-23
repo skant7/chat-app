@@ -53,14 +53,11 @@ mvn spring-boot:run
 
 Open http://localhost:8080 — **register** or **log in** with username + password in two browser profiles/tabs. Start a chat with the other person’s name; messages stay private to that pair.
 
-## CI and e2e tests
+## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) runs:
+GitHub Actions (`.github/workflows/ci.yml`) runs **unit tests** (`mvn test`) on pushes and PRs to `main`.
 
-1. **Unit tests** — `mvn test`
-2. **E2E** — Postgres service, app JAR, [Playwright](https://playwright.dev) browser tests under `e2e/`
-
-Run Playwright locally (app must be up on port 8080):
+Optional local Playwright checks live under `e2e/` (not run in CI):
 
 ```bash
 mvn -DskipTests package
@@ -75,8 +72,10 @@ cd e2e && npm install && npx playwright install chromium && npm test
 3. **Password reset:** `POST /api/auth/forgot-password` `{ username }` issues a one-time token (returned in JSON when `chat.auth.return-reset-token=true`, since there is no email). Then `POST /api/auth/reset-password` `{ token, newPassword }`. Logged-in users can also `POST /api/auth/change-password` with `X-Auth-Token` and `{ currentPassword, newPassword }`. Reset/change revoke all sessions.
 3. Send DMs to `/app/chat` with `{ "to": "…", "text": "…" }`, optionally after uploading with `POST /api/media` and including `mediaUrl`, `mediaContentType`, `mediaFileName`, `messageType` (`IMAGE` / `FILE`).
 4. Server persists the message and delivers it only via `convertAndSendToUser` to sender and recipient queues.
-5. History: `GET /api/conversation?me=…&peer=…` returns only that pair’s messages (including media metadata).
+5. History: `GET /api/conversation?me=…&peer=…` returns a **cursor page** of that pair’s messages (default **50**, newest page first). Response: `{ messages, nextBeforeId, hasMore }`. Messages within a page are oldest → newest. Pass `beforeId=<nextBeforeId>` to load the next older page; the exclusive id keyset guarantees each message appears at most once when paging through the whole conversation. Optional `limit` (1–100).
 6. Media is stored in table `media_assets` (bytea BLOB), not on the client or app `resources/`. Clients fetch with `GET /api/media/{id}` (max 10 MB; images, PDF, text, common audio/video). For large-scale production, prefer object storage (S3/MinIO) with the same API shape.
+7. Sidebar: `GET /api/contacts?me=…` returns `[{ username, unreadCount }, …]` — `unreadCount` is inbound messages to `me` with status not `READ`. Opening a chat marks those messages READ (existing status flow) and clears the badge; live `SENT` frames while another chat is open increment the badge.
+8. **Offline delivery:** messages are always written to PostgreSQL on send. If the recipient is offline, STOMP cannot push them live; when they reconnect and subscribe to `/user/queue/messages`, the server automatically replays all still-`SENT` inbound messages (also via `/app/catchup`). The client marks them DELIVERED/READ as usual — no page reload required.
 
 ## Layout
 
