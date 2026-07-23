@@ -53,14 +53,11 @@ mvn spring-boot:run
 
 Open http://localhost:8080 — **register** or **log in** with username + password in two browser profiles/tabs. Start a chat with the other person’s name; messages stay private to that pair.
 
-## CI and e2e tests
+## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) runs:
+GitHub Actions (`.github/workflows/ci.yml`) runs **unit tests** (`mvn test`) on pushes and PRs to `main`.
 
-1. **Unit tests** — `mvn test`
-2. **E2E** — Postgres service, app JAR, [Playwright](https://playwright.dev) browser tests under `e2e/`
-
-Run Playwright locally (app must be up on port 8080):
+Optional local Playwright checks live under `e2e/` (not run in CI):
 
 ```bash
 mvn -DskipTests package
