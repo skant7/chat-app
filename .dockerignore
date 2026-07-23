@@ -1,0 +1,10 @@
+.git
+.github
+.idea
+.playwright-mcp
+target
+e2e
+uploads
+*.md
+*.png
+.DS_Store

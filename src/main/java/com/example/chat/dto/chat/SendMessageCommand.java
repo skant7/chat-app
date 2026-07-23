@@ -10,7 +10,8 @@ public record SendMessageCommand(
         String messageType,
         String mediaUrl,
         String mediaContentType,
-        String mediaFileName) {
+        String mediaFileName,
+        String clientMessageId) {
 
     public static SendMessageCommand fromPayload(String fromUser, Map<String, String> payload) {
         if (payload == null) {
@@ -23,6 +24,7 @@ public record SendMessageCommand(
                 payload.get("messageType"),
                 payload.get("mediaUrl"),
                 payload.get("mediaContentType"),
-                payload.get("mediaFileName"));
+                payload.get("mediaFileName"),
+                payload.get("clientMessageId"));
     }
 }

@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
   <title>Private Chat</title>
   <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
   <style>
@@ -145,6 +147,30 @@
       font: inherit;
     }
     .contact:hover, .contact.active { background: #222733; }
+    .contact .name {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .contact .badge {
+      margin-left: auto;
+      flex-shrink: 0;
+      min-width: 1.25rem;
+      height: 1.25rem;
+      padding: 0 0.4rem;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #0b1220;
+      font-size: 0.7rem;
+      font-weight: 700;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .contact.active .badge { opacity: 0.85; }
     .dot {
       width: 8px; height: 8px; border-radius: 50%;
       background: #555; flex-shrink: 0;
@@ -176,7 +202,26 @@
     }
     .bubble.mine { align-self: flex-end; background: var(--mine); border-bottom-right-radius: 4px; }
     .bubble.theirs { align-self: flex-start; background: var(--theirs); border-bottom-left-radius: 4px; }
-    .bubble .meta { font-size: 0.7rem; color: var(--muted); margin-top: 0.25rem; }
+    .bubble .meta {
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-top: 0.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.35rem;
+    }
+    .bubble.theirs .meta { justify-content: flex-start; }
+    .bubble .ticks {
+      font-size: 0.75rem;
+      letter-spacing: -0.05em;
+      line-height: 1;
+      color: var(--muted);
+      user-select: none;
+    }
+    .bubble .ticks.sent { color: #8b93a7; }
+    .bubble .ticks.delivered { color: #8b93a7; }
+    .bubble .ticks.read { color: #53bdeb; }
     .bubble img.media {
       display: block;
       max-width: 100%;
@@ -415,8 +460,87 @@
     let peer = null;
     let stompClient = null;
     let online = new Set();
+    /** Sidebar contact usernames (unique). */
     let contacts = [];
+    /** Unread inbound counts keyed by peer username (server is source of truth on refresh). */
+    let unreadByPeer = {};
+    /**
+     * While true, STOMP SENT frames do not +1 the badge (offline catch-up replays SENT
+     * messages that are already included in /api/contacts unreadCount).
+     */
+    let suppressLiveUnreadIncrement = false;
+    let unreadResyncTimer = null;
     let pendingFile = null;
+
+    /** Conversation history keyset pagination (server page size 50, newest first). */
+    const HISTORY_PAGE_SIZE = 50;
+    let historyNextBeforeId = null;
+    let historyHasMore = false;
+    let historyLoading = false;
+    /** Conversation currently shown — ignore late responses from a prior open. */
+    let historyPeer = null;
+
+    /** Outbound messages awaiting server echo (ACK) keyed by clientMessageId. */
+    const pendingOutbound = new Map();
+    const ACK_BASE_MS = 3000;
+    const ACK_MAX_ATTEMPTS = 8;
+
+    function newClientMessageId() {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+      }
+      return 'c-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
+    }
+
+    function clearPendingOutbound(clientMessageId) {
+      if (!clientMessageId) return;
+      const entry = pendingOutbound.get(clientMessageId);
+      if (!entry) return;
+      if (entry.timer) clearTimeout(entry.timer);
+      pendingOutbound.delete(clientMessageId);
+    }
+
+    function scheduleAckWatch(clientMessageId) {
+      const entry = pendingOutbound.get(clientMessageId);
+      if (!entry) return;
+      if (entry.timer) clearTimeout(entry.timer);
+      // First wait 3s; each miss doubles: 3s, 6s, 12s, …
+      const delay = ACK_BASE_MS * Math.pow(2, entry.attempt);
+      entry.timer = setTimeout(() => retryOutbound(clientMessageId), delay);
+    }
+
+    function retryOutbound(clientMessageId) {
+      const entry = pendingOutbound.get(clientMessageId);
+      if (!entry) return;
+      if (entry.attempt + 1 >= ACK_MAX_ATTEMPTS) {
+        clearPendingOutbound(clientMessageId);
+        showUploadError('Message not acknowledged — gave up after retries');
+        return;
+      }
+      entry.attempt += 1;
+      if (stompClient && stompClient.connected) {
+        stompClient.send('/app/chat', {}, JSON.stringify(entry.payload));
+      }
+      scheduleAckWatch(clientMessageId);
+    }
+
+    /** Register outbound payload and start 3s ACK timer (exponential backoff on miss). */
+    function trackOutbound(payload) {
+      const clientMessageId = payload.clientMessageId;
+      if (!clientMessageId) return;
+      clearPendingOutbound(clientMessageId);
+      pendingOutbound.set(clientMessageId, {
+        payload,
+        attempt: 0,
+        timer: null
+      });
+      scheduleAckWatch(clientMessageId);
+    }
+
+    function ackIfMine(msg) {
+      if (!msg || msg.fromUser !== me || !msg.clientMessageId) return;
+      clearPendingOutbound(msg.clientMessageId);
+    }
 
     function showAuthError(msg) {
       if (!msg) {
@@ -455,6 +579,10 @@
       messagesEl.innerHTML = '';
       messagesEl.appendChild(emptyState);
       emptyState.hidden = false;
+      historyNextBeforeId = null;
+      historyHasMore = false;
+      historyLoading = false;
+      historyPeer = null;
     }
 
     function showUploadError(msg) {
@@ -493,12 +621,130 @@
       }
     }
 
-    function appendBubble(msg) {
-      emptyState.hidden = true;
+    function statusRank(status) {
+      const s = (status || 'SENT').toUpperCase();
+      if (s === 'READ') return 2;
+      if (s === 'DELIVERED') return 1;
+      return 0;
+    }
+
+    function ticksForStatus(status) {
+      const s = (status || 'SENT').toUpperCase();
+      if (s === 'READ') return { text: '✓✓', cls: 'ticks read', title: 'Read' };
+      if (s === 'DELIVERED') return { text: '✓✓', cls: 'ticks delivered', title: 'Delivered' };
+      return { text: '✓', cls: 'ticks sent', title: 'Sent' };
+    }
+
+    function findBubble(msg) {
+      if (msg && msg.id != null && msg.id !== '') {
+        const byId = messagesEl.querySelector('[data-message-id="' + String(msg.id) + '"]');
+        if (byId) return byId;
+      }
+      if (msg && msg.clientMessageId) {
+        return messagesEl.querySelector(
+          '[data-client-message-id="' + String(msg.clientMessageId).replace(/"/g, '') + '"]'
+        );
+      }
+      return null;
+    }
+
+    function applyStatusToBubble(div, msg) {
+      if (!div || !msg) return;
+      if (msg.id != null) div.dataset.messageId = String(msg.id);
+      if (msg.clientMessageId) div.dataset.clientMessageId = msg.clientMessageId;
+      const prev = div.dataset.status || 'SENT';
+      if (statusRank(msg.status) < statusRank(prev)) return;
+      div.dataset.status = (msg.status || 'SENT').toUpperCase();
+      const ticksEl = div.querySelector('.ticks');
+      if (!ticksEl) return;
+      const t = ticksForStatus(div.dataset.status);
+      ticksEl.textContent = t.text;
+      ticksEl.className = t.cls;
+      ticksEl.title = t.title;
+    }
+
+    function reportMessageStatus(messageId, status) {
+      if (!stompClient || !stompClient.connected || messageId == null) return;
+      stompClient.send('/app/chat/status', {}, JSON.stringify({
+        messageId: String(messageId),
+        status: status
+      }));
+    }
+
+    function reportMessageStatuses(messageIds, status) {
+      if (!stompClient || !stompClient.connected || !messageIds || !messageIds.length) return;
+      stompClient.send('/app/chat/status', {}, JSON.stringify({
+        messageIds: messageIds.join(','),
+        status: status
+      }));
+    }
+
+    function sameUser(a, b) {
+      return !!(a && b && String(a).toLowerCase() === String(b).toLowerCase());
+    }
+
+    /** Chat with this sender is selected and the browser tab is in the foreground. */
+    function conversationIsActivelyViewed(fromUser) {
+      return isActivePeer(fromUser) && typeof document !== 'undefined'
+        && document.visibilityState === 'visible';
+    }
+
+    /**
+     * Receipts from STOMP frames:
+     * - DELIVERED = this device received the frame (incl. offline catch-up). Grey ✓✓.
+     * - READ = message is shown in an open, visible chat. Blue ✓✓ only then.
+     *
+     * Important: never mark READ on mere reconnect/catch-up. Catch-up used to call
+     * READ whenever {@code peer} was still set from an earlier selection, which made
+     * senders see blue ticks while the recipient still had unread badges.
+     */
+    function handleInboundReceipts(msg) {
+      if (!msg || !sameUser(msg.toUser, me) || msg.id == null) return;
+
+      // Transport receipt → DELIVERED only (device got the bytes).
+      if (statusRank(msg.status) < statusRank('DELIVERED')) {
+        reportMessageStatus(msg.id, 'DELIVERED');
+      }
+
+      // Do not mark READ during offline catch-up; scheduleUnreadResync handles open chats.
+      if (suppressLiveUnreadIncrement) return;
+
+      // Live message while that conversation is open and the tab is visible → READ.
+      if (conversationIsActivelyViewed(msg.fromUser)
+          && statusRank(msg.status) < statusRank('READ')) {
+        reportMessageStatus(msg.id, 'READ');
+      }
+    }
+
+    /** Mark inbound bubbles currently painted in the open chat as READ. */
+    function markVisibleInboundAsRead() {
+      if (!peer || !conversationIsActivelyViewed(peer)) return;
+      const ids = [];
+      messagesEl.querySelectorAll('.bubble.theirs[data-message-id]').forEach((el) => {
+        const id = el.dataset.messageId;
+        if (!id) return;
+        if (statusRank(el.dataset.status || 'SENT') < statusRank('READ')) {
+          ids.push(id);
+        }
+      });
+      if (ids.length) {
+        reportMessageStatuses(ids, 'READ');
+        ids.forEach((id) => {
+          const el = messagesEl.querySelector('[data-message-id="' + id + '"]');
+          if (el) el.dataset.status = 'READ';
+        });
+      }
+    }
+
+    function buildBubble(msg) {
       const mine = msg.fromUser === me;
       const div = document.createElement('div');
       div.className = 'bubble ' + (mine ? 'mine' : 'theirs');
-      div.dataset.messageId = msg.id || '';
+      div.dataset.messageId = msg.id != null ? String(msg.id) : '';
+      div.dataset.status = (msg.status || 'SENT').toUpperCase();
+      if (msg.clientMessageId) {
+        div.dataset.clientMessageId = msg.clientMessageId;
+      }
 
       const type = (msg.messageType || 'TEXT').toUpperCase();
       if (msg.mediaUrl && (type === 'IMAGE' || (msg.mediaContentType || '').startsWith('image/'))) {
@@ -528,40 +774,294 @@
 
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = formatTime(msg.timestamp);
+      const time = document.createElement('span');
+      time.className = 'time';
+      time.textContent = formatTime(msg.timestamp);
+      meta.appendChild(time);
+      if (mine) {
+        const ticks = document.createElement('span');
+        const t = ticksForStatus(msg.status);
+        ticks.className = t.cls;
+        ticks.textContent = t.text;
+        ticks.title = t.title;
+        meta.appendChild(ticks);
+      }
       div.appendChild(meta);
-      messagesEl.appendChild(div);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return div;
     }
+
+    function appendBubble(msg, options) {
+      const scroll = !options || options.scroll !== false;
+      // Status / retry re-delivery: update existing bubble instead of duplicating.
+      const existing = findBubble(msg);
+      if (existing) {
+        applyStatusToBubble(existing, msg);
+        return;
+      }
+
+      emptyState.hidden = true;
+      messagesEl.appendChild(buildBubble(msg));
+      if (scroll) {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+    }
+
+    /**
+     * Insert older history above existing bubbles, preserving scroll position
+     * so the user's viewport does not jump when scrolling up.
+     * Messages must be oldest → newest; duplicates (by id / clientMessageId) are skipped.
+     */
+    function prependBubbles(messages) {
+      if (!messages || !messages.length) return;
+      emptyState.hidden = true;
+      const prevHeight = messagesEl.scrollHeight;
+      const prevTop = messagesEl.scrollTop;
+      // First real bubble after optional emptyState — insert before it.
+      let anchor = emptyState.nextSibling;
+      while (anchor && !anchor.classList?.contains('bubble')) {
+        anchor = anchor.nextSibling;
+      }
+      const frag = document.createDocumentFragment();
+      for (const msg of messages) {
+        if (findBubble(msg)) continue;
+        frag.appendChild(buildBubble(msg));
+      }
+      if (!frag.childNodes.length) return;
+      if (anchor) {
+        messagesEl.insertBefore(frag, anchor);
+      } else {
+        messagesEl.appendChild(frag);
+      }
+      messagesEl.scrollTop = prevTop + (messagesEl.scrollHeight - prevHeight);
+    }
+
+    /** History just rendered in the open chat → those inbound messages are READ. */
+    function markHistoryAsRead(messages) {
+      const unread = (messages || [])
+        .filter(m => sameUser(m.toUser, me)
+          && (m.status || 'SENT').toUpperCase() !== 'READ'
+          && m.id != null)
+        .map(m => m.id);
+      if (unread.length) {
+        reportMessageStatuses(unread, 'READ');
+      }
+    }
+
+    /**
+     * Normalize conversation API payload.
+     * Current: { messages, nextBeforeId, hasMore }
+     * Legacy (pre-pagination): bare ChatMessage[] — treat as a single full page.
+     */
+    function normalizeConversationPage(data) {
+      if (Array.isArray(data)) {
+        return { messages: data, nextBeforeId: null, hasMore: false };
+      }
+      if (data && typeof data === 'object') {
+        const messages = Array.isArray(data.messages) ? data.messages : [];
+        return {
+          messages,
+          nextBeforeId: data.nextBeforeId != null ? data.nextBeforeId : null,
+          hasMore: !!data.hasMore
+        };
+      }
+      return { messages: [], nextBeforeId: null, hasMore: false };
+    }
+
+    async function fetchConversationPage(peerName, beforeId) {
+      let url = '/api/conversation?me=' + encodeURIComponent(me)
+        + '&peer=' + encodeURIComponent(peerName)
+        + '&limit=' + HISTORY_PAGE_SIZE;
+      if (beforeId != null) {
+        url += '&beforeId=' + encodeURIComponent(String(beforeId));
+      }
+      // cache: 'no-store' avoids sticky empty-chat after API shape changes
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) {
+        throw new Error('Failed to load conversation (' + res.status + ')');
+      }
+      return normalizeConversationPage(await res.json());
+    }
+
+    async function loadOlderHistory() {
+      if (!peer || !historyHasMore || historyLoading || historyNextBeforeId == null) return;
+      const forPeer = peer;
+      historyLoading = true;
+      try {
+        const page = await fetchConversationPage(forPeer, historyNextBeforeId);
+        if (historyPeer !== forPeer || peer !== forPeer) return;
+        const messages = page.messages || [];
+        prependBubbles(messages);
+        historyHasMore = !!page.hasMore;
+        historyNextBeforeId = page.nextBeforeId != null ? page.nextBeforeId : null;
+        markHistoryAsRead(messages);
+      } catch (e) {
+        console.warn(e);
+      } finally {
+        if (historyPeer === forPeer) historyLoading = false;
+      }
+    }
+
+    messagesEl.addEventListener('scroll', () => {
+      // Near the top → request the next older page.
+      if (messagesEl.scrollTop < 80) {
+        loadOlderHistory();
+      }
+    });
+
+    function contactKey(name) {
+      if (!name) return null;
+      const existing = contacts.find(n => n && n.toLowerCase() === name.toLowerCase());
+      return existing || name;
+    }
+
+    function ensureContact(name) {
+      if (!name || name.toLowerCase() === me.toLowerCase()) return null;
+      const key = contactKey(name);
+      if (!contacts.some(n => n.toLowerCase() === name.toLowerCase())) {
+        contacts.push(name);
+        return name;
+      }
+      return key;
+    }
+
+    function getUnread(name) {
+      if (!name) return 0;
+      if (unreadByPeer[name] != null) return Number(unreadByPeer[name]) || 0;
+      const key = Object.keys(unreadByPeer).find(k => k.toLowerCase() === name.toLowerCase());
+      return key ? (Number(unreadByPeer[key]) || 0) : 0;
+    }
+
+    function setUnread(name, count) {
+      if (!name) return;
+      const n = Math.max(0, Number(count) || 0);
+      // Prefer the canonical contact key so badges stay stable.
+      const key = contactKey(name) || name;
+      // Drop any case-variant keys.
+      for (const k of Object.keys(unreadByPeer)) {
+        if (k !== key && k.toLowerCase() === key.toLowerCase()) {
+          delete unreadByPeer[k];
+        }
+      }
+      if (n <= 0) {
+        delete unreadByPeer[key];
+      } else {
+        unreadByPeer[key] = n;
+      }
+    }
+
+    /**
+     * Live unread badge updates from STOMP frames.
+     * - Open chat with sender → count is 0 (messages are marked READ).
+     * - Fresh inbound SENT while chat closed → +1 (status re-pushes use DELIVERED/READ).
+     */
+    function updateUnreadFromMessage(msg) {
+      if (!msg || msg.toUser !== me || !msg.fromUser || msg.fromUser === me) return;
+      const other = ensureContact(msg.fromUser);
+      if (!other) return;
+      if (peer && peer.toLowerCase() === other.toLowerCase()) {
+        setUnread(other, 0);
+        renderContacts();
+        return;
+      }
+      const status = (msg.status || 'SENT').toUpperCase();
+      if (status === 'READ') {
+        // Message is read; do not count. Full truth refreshed via open/refresh.
+        return;
+      }
+      // Only brand-new live deliveries start as SENT; DELIVERED/READ are status updates.
+      // Skip +1 during reconnect catch-up (those SENT rows are already in server unread counts).
+      if (status === 'SENT' && !suppressLiveUnreadIncrement) {
+        setUnread(other, getUnread(other) + 1);
+        renderContacts();
+      }
+    }
+
+    /** After offline catch-up frames land, re-sync badges; if a chat is open and visible, mark those READ. */
+    function scheduleUnreadResync() {
+      if (unreadResyncTimer) clearTimeout(unreadResyncTimer);
+      unreadResyncTimer = setTimeout(() => {
+        unreadResyncTimer = null;
+        suppressLiveUnreadIncrement = false;
+        // Catch-up may have painted messages into an already-open, visible chat.
+        markVisibleInboundAsRead();
+        refreshContacts();
+      }, 800);
+    }
+
+    // Tab becomes visible again with a conversation open → those messages are on screen → READ.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        markVisibleInboundAsRead();
+      }
+    });
 
     function renderContacts() {
       contactsEl.innerHTML = '';
-      const names = [...new Set(contacts)].filter(n => n && n.toLowerCase() !== me.toLowerCase()).sort((a, b) => a.localeCompare(b));
+      const names = [...new Set(contacts)]
+        .filter(n => n && n.toLowerCase() !== me.toLowerCase())
+        // Unread first, then A–Z
+        .sort((a, b) => {
+          const ub = getUnread(b) - getUnread(a);
+          if (ub !== 0) return ub;
+          return a.localeCompare(b);
+        });
       for (const name of names) {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'contact' + (peer === name ? ' active' : '');
+        const isActive = peer && peer.toLowerCase() === name.toLowerCase();
+        btn.className = 'contact' + (isActive ? ' active' : '');
         const dot = document.createElement('span');
-        dot.className = 'dot' + (online.has(name) ? ' on' : '');
+        const isOnline = [...online].some(o => o && o.toLowerCase() === name.toLowerCase());
+        dot.className = 'dot' + (isOnline ? ' on' : '');
         const label = document.createElement('span');
+        label.className = 'name';
         label.textContent = name;
         btn.appendChild(dot);
         btn.appendChild(label);
+        const unread = getUnread(name);
+        if (unread > 0 && !isActive) {
+          const badge = document.createElement('span');
+          badge.className = 'badge';
+          badge.textContent = unread > 99 ? '99+' : String(unread);
+          badge.title = unread + ' unread';
+          btn.appendChild(badge);
+        }
         btn.addEventListener('click', () => openConversation(name));
         contactsEl.appendChild(btn);
       }
     }
 
     async function refreshContacts() {
-      const res = await fetch('/api/contacts?me=' + encodeURIComponent(me));
-      contacts = await res.json();
+      const res = await fetch('/api/contacts?me=' + encodeURIComponent(me), { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      const nextNames = [];
+      const nextUnread = {};
+      if (Array.isArray(data)) {
+        for (const item of data) {
+          // New shape: { username, unreadCount }; legacy: bare string
+          if (typeof item === 'string') {
+            if (item) nextNames.push(item);
+          } else if (item && item.username) {
+            nextNames.push(item.username);
+            const c = Number(item.unreadCount) || 0;
+            if (c > 0) nextUnread[item.username] = c;
+          }
+        }
+      }
+      contacts = nextNames;
+      unreadByPeer = nextUnread;
+      // Open conversation is always treated as read in the UI.
+      if (peer) setUnread(peer, 0);
       renderContacts();
     }
 
     async function openConversation(name) {
       peer = name.trim();
       if (!peer || peer.toLowerCase() === me.toLowerCase()) return;
-      if (!contacts.includes(peer)) contacts.push(peer);
+      ensureContact(peer);
+      // Opening the chat means messages are (or will be) visible → clear badge immediately.
+      setUnread(peer, 0);
       renderContacts();
       peerLabel.hidden = false;
       peerLabel.textContent = peer;
@@ -572,28 +1072,62 @@
       clearMessages();
       emptyState.textContent = 'No messages yet. Say hello.';
       emptyState.hidden = false;
-      const res = await fetch(
-        '/api/conversation?me=' + encodeURIComponent(me) + '&peer=' + encodeURIComponent(peer)
-      );
-      const history = await res.json();
-      if (history.length) {
-        emptyState.hidden = true;
-        history.forEach(appendBubble);
+      historyPeer = peer;
+      historyLoading = true;
+      const forPeer = peer;
+      try {
+        // Newest page first (up to 50); scroll-up loads older via beforeId.
+        const page = await fetchConversationPage(forPeer, null);
+        if (historyPeer !== forPeer || peer !== forPeer) return;
+        const history = page.messages || [];
+        historyHasMore = !!page.hasMore;
+        historyNextBeforeId = page.nextBeforeId != null ? page.nextBeforeId : null;
+        if (history.length) {
+          emptyState.hidden = true;
+          history.forEach(msg => appendBubble(msg, { scroll: false }));
+          // After layout, pin to newest (bottom). rAF avoids scrollHeight=0 races.
+          requestAnimationFrame(() => {
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+          });
+          markHistoryAsRead(history);
+        }
+        setUnread(forPeer, 0);
+        renderContacts();
+      } catch (e) {
+        console.warn(e);
+        emptyState.textContent = 'Could not load messages.';
+        emptyState.hidden = false;
+      } finally {
+        if (historyPeer === forPeer) historyLoading = false;
       }
       document.getElementById('text').focus();
+    }
+
+    function isActivePeer(name) {
+      return sameUser(peer, name);
     }
 
     function maybeShowMessage(msg) {
       const involvesMe = msg.fromUser === me || msg.toUser === me;
       if (!involvesMe) return;
       const other = msg.fromUser === me ? msg.toUser : msg.fromUser;
-      if (!contacts.includes(other)) {
-        contacts.push(other);
-        renderContacts();
+      ensureContact(other);
+      updateUnreadFromMessage(msg);
+      // Always apply status updates for my outbound messages (ticks), even if another chat is open.
+      if (msg.fromUser === me) {
+        const bubble = findBubble(msg);
+        if (bubble) {
+          applyStatusToBubble(bubble, msg);
+        } else if (isActivePeer(other)) {
+          appendBubble(msg);
+        }
+        return;
       }
-      if (peer === other) {
+      if (isActivePeer(other)) {
         appendBubble(msg);
       }
+      // Badge / order may have changed when chat is closed or unread cleared.
+      renderContacts();
     }
 
     function connect() {
@@ -603,13 +1137,30 @@
         statusEl.textContent = 'Online';
         sendBtn.disabled = false;
         attachBtn.disabled = false;
+        // Catch-up will replay SENT messages; don't double-count them on the badge.
+        suppressLiveUnreadIncrement = true;
         stompClient.subscribe('/user/queue/messages', (frame) => {
-          maybeShowMessage(JSON.parse(frame.body));
+          const msg = JSON.parse(frame.body);
+          // Echo of our send with matching clientMessageId = ACK (clear retry timer).
+          ackIfMine(msg);
+          // Recipient: frame received → DELIVERED; open chat → READ.
+          handleInboundReceipts(msg);
+          maybeShowMessage(msg);
+          // Offline catch-up may arrive as a burst of SENT frames.
+          if (suppressLiveUnreadIncrement) {
+            scheduleUnreadResync();
+          }
         });
         stompClient.subscribe('/topic/presence', (frame) => {
           online = new Set(JSON.parse(frame.body));
           renderContacts();
         });
+        // Ask server to push any messages stored while we were offline (no page reload).
+        // MessageCatchupListener also flushes on SUBSCRIBE; this is an explicit safety net.
+        try {
+          stompClient.send('/app/catchup', {}, '{}');
+        } catch (_) { /* ignore */ }
+        scheduleUnreadResync();
         refreshContacts();
         fetch('/api/online').then(r => r.json()).then(list => {
           online = new Set(list);
@@ -619,6 +1170,7 @@
         statusEl.textContent = 'Disconnected — retrying…';
         sendBtn.disabled = true;
         attachBtn.disabled = true;
+        suppressLiveUnreadIncrement = true;
         setTimeout(connect, 2000);
       });
     }
@@ -834,7 +1386,8 @@
       showUploadError('');
 
       try {
-        let payload = { to: peer, text };
+        const clientMessageId = newClientMessageId();
+        let payload = { to: peer, text, clientMessageId };
         if (file) {
           const uploaded = await uploadMedia(file);
           payload.mediaUrl = uploaded.url;
@@ -842,6 +1395,8 @@
           payload.mediaFileName = uploaded.fileName;
           payload.messageType = uploaded.messageType;
         }
+        // Same clientMessageId on retry; server will not insert another row.
+        trackOutbound(payload);
         stompClient.send('/app/chat', {}, JSON.stringify(payload));
         document.getElementById('text').value = '';
         clearAttachment();
